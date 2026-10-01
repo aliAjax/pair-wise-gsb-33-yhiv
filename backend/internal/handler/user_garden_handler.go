@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -45,7 +46,10 @@ func (h *UserGardenHandler) Add(c *gin.Context) {
 	}
 	g := &model.UserGarden{
 		PlantSpeciesID: req.PlantSpeciesID, Nickname: req.Nickname,
-		OwnedSince: req.OwnedSince, Location: req.Location,
+		Location: req.Location,
+	}
+	if req.OwnedSince != nil {
+		g.OwnedSince = req.OwnedSince.Time()
 	}
 	created, err := h.svc.Add(middleware.GetUserID(c), g)
 	if err != nil {
@@ -53,6 +57,62 @@ func (h *UserGardenHandler) Add(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, dto.OK(created))
+}
+
+// Update handles PUT /gardens/:id.
+func (h *UserGardenHandler) Update(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.Error(util.NewAppError(http.StatusBadRequest, constants.CodeBadRequest, "invalid garden id"))
+		return
+	}
+	var req dto.GardenUpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(util.NewAppError(http.StatusBadRequest, constants.CodeBadRequest, constants.MsgInvalidParam))
+		return
+	}
+	nickname, location := "", ""
+	if req.Nickname != nil {
+		nickname = *req.Nickname
+	}
+	if req.Location != nil {
+		location = *req.Location
+	}
+	var ownedSince *time.Time
+	if req.OwnedSince != nil && !req.OwnedSince.IsZero() {
+		t := req.OwnedSince.Time()
+		ownedSince = &t
+	}
+	g, err := h.svc.Update(middleware.GetUserID(c), uint(id), nickname, location, ownedSince)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, dto.OK(g))
+}
+
+// Repot handles POST /gardens/:id/repot.
+func (h *UserGardenHandler) Repot(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.Error(util.NewAppError(http.StatusBadRequest, constants.CodeBadRequest, "invalid garden id"))
+		return
+	}
+	var req dto.GardenRepotRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(util.NewAppError(http.StatusBadRequest, constants.CodeBadRequest, constants.MsgInvalidParam))
+		return
+	}
+	if req.OwnedSince == nil || req.OwnedSince.IsZero() {
+		c.Error(util.NewAppError(http.StatusBadRequest, constants.CodeBadRequest, "owned_since required"))
+		return
+	}
+	newPot, err := h.svc.Repot(middleware.GetUserID(c), uint(id), req.Nickname, req.Location, req.OwnedSince.Time())
+	if err != nil {
+		c.Error(err)
+		return
+	}
+	c.JSON(http.StatusCreated, dto.OK(newPot))
 }
 
 // BindReminder handles PUT /gardens/:id/reminder.

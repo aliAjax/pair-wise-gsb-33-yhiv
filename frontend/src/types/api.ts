@@ -25,22 +25,33 @@ export interface UserInfo {
 export interface CareReminder {
   id: number
   user_id: number
+  garden_id: number
   plant_species_id: number
   task_title: string
   remind_date: string
   frequency: string
   status: 'pending' | 'done' | 'overdue'
+  pot_no?: string
+  pot_status?: string
+  plant_name?: string
   created_at: string
+}
+
+export interface ReminderCreateResult {
+  reminder: CareReminder
+  already_existed: boolean
 }
 
 export interface UserGarden {
   id: number
   user_id: number
   plant_species_id: number
+  pot_no: string
   nickname: string
   owned_since: string
   location: string
-  care_reminder_id: number
+  status: 'active' | 'repotted'
+  plant_name?: string
   created_at: string
 }
 

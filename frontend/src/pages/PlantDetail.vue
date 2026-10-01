@@ -18,7 +18,7 @@
         <p class="desc">{{ plant.description }}</p>
         <div class="actions">
           <FavoriteButton target-type="plant" :target-id="plant.id" />
-          <el-button type="success" :loading="gardenLoading" @click="addToGarden">🌱 加入我的花园</el-button>
+          <el-button type="success" @click="addToGarden">🌱 登记一盆到我的花园</el-button>
         </div>
       </el-card>
     </div>
@@ -40,7 +40,6 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { getPlant } from '@/api/plant'
 import { listPests } from '@/api/pest'
-import { addGarden } from '@/api/garden'
 import { useAuth } from '@/hooks/useAuth'
 import ImageCarousel from '@/components/common/ImageCarousel.vue'
 import FavoriteButton from '@/components/common/FavoriteButton.vue'
@@ -53,7 +52,6 @@ const router = useRouter()
 const { isLoggedIn } = useAuth()
 const plant = ref<PlantSpecies | null>(null)
 const pests = ref<DiseasePest[]>([])
-const gardenLoading = ref(false)
 
 onMounted(async () => {
   plant.value = await getPlant(route.params.id as string)
@@ -66,13 +64,8 @@ async function addToGarden() {
     router.push('/login')
     return
   }
-  gardenLoading.value = true
-  try {
-    await addGarden({ plant_species_id: plant.value!.id, nickname: plant.value!.name })
-    ElMessage.success('已加入我的花园')
-  } finally {
-    gardenLoading.value = false
-  }
+  // 每盆都要独立登记位置和接管时间，跳到花园页打开预填的登记表单。
+  router.push({ path: '/garden', query: { add_plant: String(plant.value!.id) } })
 }
 </script>
 

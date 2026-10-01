@@ -2,6 +2,8 @@ package main
 
 import (
 	"log/slog"
+	"strings"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -10,18 +12,232 @@ import (
 	"github.com/gbplantwiki/gbplantwiki/internal/model"
 )
 
+func daysAgo(n int) time.Time     { return time.Now().AddDate(0, 0, -n) }
+func daysFromNow(n int) time.Time { return time.Now().AddDate(0, 0, n) }
+
 func migrate(db *gorm.DB) error {
-	return db.AutoMigrate(
+	// AutoMigrate cannot drop columns/indexes: remove the legacy unique index
+	// (user_id, plant_species_id) first, because multiple pots of the same
+	// species are now allowed. Both the GORM tag name and the init.sql name
+	// are handled for existing databases.
+	for _, idx := range []string{"idx_garden_user_plant", "uk_garden_user_plant"} {
+		if err := dropIndexIfExists(db, "user_gardens", idx); err != nil {
+			return err
+		}
+	}
+
+	// Detect upgrade vs fresh install. A legacy user_gardens table lacks the
+	// pot_no column. On legacy databases the new NOT NULL unique columns must
+	// be added as nullable, backfilled, then tightened — directly creating the
+	// final unique index would fail on duplicate empty pot numbers.
+	legacyGarden := tableExists(db, "user_gardens") && !columnExists(db, "user_gardens", "pot_no")
+	legacyReminders := tableExists(db, "care_reminders") && !columnExists(db, "care_reminders", "garden_id")
+	if legacyGarden || legacyReminders {
+		if err := prepareLegacyTables(db, legacyGarden, legacyReminders); err != nil {
+			return err
+		}
+	}
+
+	if err := db.AutoMigrate(
 		&model.User{},
 		&model.PlantSpecies{},
 		&model.CareArticle{},
 		&model.DiseasePest{},
-		&model.CareReminder{},
 		&model.Favorite{},
-		&model.UserGarden{},
 		&model.Question{},
 		&model.Answer{},
-	)
+	); err != nil {
+		return err
+	}
+	// On legacy databases the two redesigned tables are migrated via explicit
+	// DDL (their model tags already carry the final NOT NULL unique indexes,
+	// which cannot be created before backfill). On fresh installs AutoMigrate
+	// creates them directly from the model tags.
+	if !legacyGarden {
+		if err := db.AutoMigrate(&model.UserGarden{}); err != nil {
+			return err
+		}
+	}
+	if !legacyReminders {
+		if err := db.AutoMigrate(&model.CareReminder{}); err != nil {
+			return err
+		}
+	}
+
+	if columnExists(db, "user_gardens", "care_reminder_id") {
+		if err := db.Exec("ALTER TABLE user_gardens DROP COLUMN care_reminder_id").Error; err != nil {
+			return err
+		}
+	}
+
+	if err := backfillLegacyPots(db); err != nil {
+		return err
+	}
+	if err := backfillLegacyReminders(db); err != nil {
+		return err
+	}
+	if legacyGarden || legacyReminders {
+		if err := finalizeLegacyTables(db, legacyGarden, legacyReminders); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// prepareLegacyTables adds the new columns in a relaxed (nullable / default 0)
+// shape so existing rows survive the upgrade before they are backfilled.
+func prepareLegacyTables(db *gorm.DB, legacyGarden, legacyReminders bool) error {
+	if legacyGarden {
+		if err := db.Exec("ALTER TABLE user_gardens ADD COLUMN pot_no VARCHAR(32) NULL AFTER plant_species_id").Error; err != nil {
+			return err
+		}
+		if !columnExists(db, "user_gardens", "status") {
+			if err := db.Exec("ALTER TABLE user_gardens ADD COLUMN status VARCHAR(16) NOT NULL DEFAULT 'active'").Error; err != nil {
+				return err
+			}
+		}
+	}
+	if legacyReminders {
+		if err := db.Exec("ALTER TABLE care_reminders ADD COLUMN garden_id BIGINT UNSIGNED NOT NULL DEFAULT 0 AFTER user_id").Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// finalizeLegacyTables creates the final unique indexes and tightens pot_no to
+// NOT NULL once every legacy row has been backfilled.
+func finalizeLegacyTables(db *gorm.DB, legacyGarden, legacyReminders bool) error {
+	if legacyGarden {
+		if err := createIndexIfNotExists(db, "user_gardens",
+			"CREATE UNIQUE INDEX uk_garden_pot_no ON user_gardens (user_id, pot_no)"); err != nil {
+			return err
+		}
+		if err := createIndexIfNotExists(db, "user_gardens",
+			"CREATE INDEX idx_garden_user ON user_gardens (user_id, plant_species_id)"); err != nil {
+			return err
+		}
+		if err := createIndexIfNotExists(db, "user_gardens",
+			"CREATE INDEX idx_user_gardens_status ON user_gardens (status)"); err != nil {
+			return err
+		}
+		if err := db.Exec("ALTER TABLE user_gardens MODIFY COLUMN pot_no VARCHAR(32) NOT NULL").Error; err != nil {
+			return err
+		}
+	}
+	if legacyReminders {
+		if err := createIndexIfNotExists(db, "care_reminders",
+			"CREATE UNIQUE INDEX uk_reminder_plan ON care_reminders (user_id, garden_id, task_title, remind_date)"); err != nil {
+			return err
+		}
+		if err := createIndexIfNotExists(db, "care_reminders",
+			"CREATE INDEX idx_reminders_garden ON care_reminders (garden_id)"); err != nil {
+			return err
+		}
+		if err := createIndexIfNotExists(db, "care_reminders",
+			"CREATE INDEX idx_care_reminders_status ON care_reminders (status)"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func tableExists(db *gorm.DB, table string) bool {
+	var count int64
+	db.Raw("SELECT COUNT(1) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?", table).Scan(&count)
+	return count > 0
+}
+
+func columnExists(db *gorm.DB, table, column string) bool {
+	var count int64
+	db.Raw("SELECT COUNT(1) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?", table, column).Scan(&count)
+	return count > 0
+}
+
+func createIndexIfNotExists(db *gorm.DB, table, ddl string) error {
+	var count int64
+	if err := db.Raw(
+		"SELECT COUNT(1) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?",
+		table, indexNameFromDDL(ddl),
+	).Scan(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+	return db.Exec(ddl).Error
+}
+
+// indexNameFromDDL extracts the index name from a "CREATE [UNIQUE] INDEX x ON"
+// statement for idempotency checks.
+func indexNameFromDDL(ddl string) string {
+	rest := strings.TrimPrefix(ddl, "CREATE UNIQUE ")
+	rest = strings.TrimPrefix(rest, "CREATE ")
+	rest = strings.TrimPrefix(rest, "INDEX ")
+	rest = strings.TrimLeft(rest, " \t")
+	end := strings.IndexAny(rest, " (")
+	if end < 0 {
+		return rest
+	}
+	return rest[:end]
+}
+
+// dropIndexIfExists drops an index by name when it exists (MySQL has no
+// "DROP INDEX IF EXISTS" before 8.0.29).
+func dropIndexIfExists(db *gorm.DB, table, index string) error {
+	var count int64
+	if err := db.Raw(
+		"SELECT COUNT(1) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?",
+		table, index,
+	).Scan(&count).Error; err != nil {
+		return err
+	}
+	if count == 0 {
+		return nil
+	}
+	return db.Exec("ALTER TABLE " + table + " DROP INDEX `" + index + "`").Error
+}
+
+// backfillLegacyPots fills pot_no/status for pots created before per-pot
+// registration: pot numbers restart at P0001 per user and are assigned by
+// takeover date (earliest first).
+func backfillLegacyPots(db *gorm.DB) error {
+	potFill := `
+UPDATE user_gardens ug
+JOIN (
+  SELECT id, CONCAT('P', LPAD(ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY owned_since ASC, id ASC), 4, '0')) AS new_pot_no
+  FROM user_gardens
+  WHERE pot_no = '' OR pot_no IS NULL
+) t ON t.id = ug.id
+SET ug.pot_no = t.new_pot_no`
+	if err := db.Exec(potFill).Error; err != nil {
+		return err
+	}
+	return db.Exec(`UPDATE user_gardens SET status = 'active' WHERE status = '' OR status IS NULL`).Error
+}
+
+// backfillLegacyReminders attaches reminders created before pot-bound
+// reminders to the earliest-taken-over pot of the same species per user.
+// Idempotent: only rows without a pot (garden_id = 0) are touched.
+func backfillLegacyReminders(db *gorm.DB) error {
+	reminderFill := `
+UPDATE care_reminders cr
+JOIN (
+  SELECT cr2.id AS reminder_id, ug.id AS garden_id
+  FROM care_reminders cr2
+  JOIN (
+    SELECT user_id, plant_species_id, MIN(owned_since) AS earliest
+    FROM user_gardens
+    GROUP BY user_id, plant_species_id
+  ) e ON e.user_id = cr2.user_id AND e.plant_species_id = cr2.plant_species_id
+  JOIN user_gardens ug
+    ON ug.user_id = cr2.user_id
+   AND ug.plant_species_id = cr2.plant_species_id
+   AND ug.owned_since = e.earliest
+  WHERE cr2.garden_id = 0 AND cr2.plant_species_id > 0
+) m ON m.reminder_id = cr.id
+SET cr.garden_id = m.garden_id`
+	return db.Exec(reminderFill).Error
 }
 
 func seed(db *gorm.DB) error {
@@ -78,17 +294,27 @@ func seed(db *gorm.DB) error {
 		return err
 	}
 
+	// Two independently registered pots for the demo user: each pot has its
+	// own pot number, location and takeover date.
+	pots := []model.UserGarden{
+		{UserID: user.ID, PlantSpeciesID: plants[3].ID, PotNo: "P0001", Nickname: "阳台月季", OwnedSince: daysAgo(120), Location: "南阳台", Status: model.PotActive},
+		{UserID: user.ID, PlantSpeciesID: plants[0].ID, PotNo: "P0002", Nickname: "客厅龟背竹", OwnedSince: daysAgo(200), Location: "客厅窗边", Status: model.PotActive},
+	}
+	if err := db.Create(&pots).Error; err != nil {
+		return err
+	}
+
 	reminders := []model.CareReminder{
-		{UserID: user.ID, PlantSpeciesID: plants[3].ID, TaskTitle: "给月季补充缓释肥", Frequency: "monthly", Status: model.ReminderPending},
-		{UserID: user.ID, PlantSpeciesID: plants[0].ID, TaskTitle: "龟背竹叶片擦拭除尘", Frequency: "weekly", Status: model.ReminderPending},
+		{UserID: user.ID, GardenID: pots[0].ID, PlantSpeciesID: plants[3].ID, TaskTitle: "给月季补充缓释肥", RemindDate: daysFromNow(3), Frequency: "monthly", Status: model.ReminderPending},
+		{UserID: user.ID, GardenID: pots[1].ID, PlantSpeciesID: plants[0].ID, TaskTitle: "龟背竹叶片擦拭除尘", RemindDate: daysFromNow(1), Frequency: "weekly", Status: model.ReminderPending},
 	}
 	if err := db.Create(&reminders).Error; err != nil {
 		return err
 	}
 
 	questions := []model.Question{
-		{UserID: user.ID, Title: "新买的月季叶子发黄怎么办？", Content: "刚上盆一周，叶片边缘发黄，是不是浇水太多？", Status: "open"},
-		{UserID: user.ID, Title: "多肉徒长了如何补救？", Content: "冬季光照不足，多肉长高了，可以砍头吗？", Status: "open"},
+		{UserID: user.ID, Title: "新买的月季叶子发黄怎么办？", Content: "刚上盆一周，叶片边缘发黄，是不是浇水太多？", Images: `[]`, Status: "open"},
+		{UserID: user.ID, Title: "多肉徒长了如何补救？", Content: "冬季光照不足，多肉长高了，可以砍头吗？", Images: `[]`, Status: "open"},
 	}
 	if err := db.Create(&questions).Error; err != nil {
 		return err
@@ -104,6 +330,7 @@ func seed(db *gorm.DB) error {
 
 	logger.Info("gbplantwiki seed data created",
 		"users", 2, "plants", len(plants), "articles", len(articles),
-		"pests", len(pests), "reminders", len(reminders), "questions", len(questions), "answers", len(answers))
+		"pests", len(pests), "pots", len(pots), "reminders", len(reminders),
+		"questions", len(questions), "answers", len(answers))
 	return nil
 }

@@ -57,16 +57,32 @@ func (h *CareReminderHandler) Create(c *gin.Context) {
 		c.Error(util.NewAppError(http.StatusBadRequest, constants.CodeBadRequest, constants.MsgInvalidParam+": "+err.Error()))
 		return
 	}
-	m := &model.CareReminder{
-		PlantSpeciesID: req.PlantSpeciesID, TaskTitle: req.TaskTitle,
-		RemindDate: req.RemindDate, Frequency: req.Frequency,
+	if req.RemindDate == nil || req.RemindDate.IsZero() {
+		c.Error(util.NewAppError(http.StatusBadRequest, constants.CodeBadRequest, "remind_date required"))
+		return
 	}
-	created, err := h.svc.Create(middleware.GetUserID(c), m)
+	m := &model.CareReminder{
+		GardenID:       req.GardenID,
+		PlantSpeciesID: req.PlantSpeciesID,
+		TaskTitle:      req.TaskTitle,
+		RemindDate:     req.RemindDate.Time(),
+		Frequency:      req.Frequency,
+	}
+	result, err := h.svc.Create(middleware.GetUserID(c), m)
 	if err != nil {
 		c.Error(err)
 		return
 	}
-	c.JSON(http.StatusCreated, dto.OK(created))
+	// Two devices submitting the same plan: the later request gets the
+	// existing plan back with an already_existed marker instead of an error.
+	status := http.StatusCreated
+	if result.AlreadyExisted {
+		status = http.StatusOK
+	}
+	c.JSON(status, dto.OK(gin.H{
+		"reminder":        result.Reminder,
+		"already_existed": result.AlreadyExisted,
+	}))
 }
 
 // UpdateStatus handles PUT /reminders/:id/status.

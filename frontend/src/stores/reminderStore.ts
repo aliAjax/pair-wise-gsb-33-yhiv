@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { listReminders, updateReminderStatus, createReminder } from '@/api/reminder'
-import type { CareReminder } from '@/types/api'
+import { listReminders, updateReminderStatus, createReminder, type ReminderPayload } from '@/api/reminder'
+import type { CareReminder, ReminderCreateResult } from '@/types/api'
 
 export const useReminderStore = defineStore('reminder', () => {
   const reminders = ref<CareReminder[]>([])
@@ -10,9 +10,12 @@ export const useReminderStore = defineStore('reminder', () => {
     reminders.value = await listReminders(status)
   }
 
-  async function create(payload: { plant_species_id?: number; task_title: string; remind_date: string; frequency?: string }) {
-    await createReminder(payload)
+  // Returns the creation result; when another device already submitted the
+  // same plan, already_existed is true and callers should say "已有计划".
+  async function create(payload: ReminderPayload): Promise<ReminderCreateResult> {
+    const result = await createReminder(payload)
     await load()
+    return result
   }
 
   async function setStatus(id: number, status: string) {

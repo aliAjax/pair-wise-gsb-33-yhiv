@@ -14,6 +14,16 @@
         <el-card>
           <template #header>本月养护提醒</template>
           <el-form inline>
+            <el-form-item label="花盆">
+              <el-select v-model="form.garden_id" placeholder="选择花盆" style="width: 220px">
+                <el-option
+                  v-for="g in activePots"
+                  :key="g.id"
+                  :label="`${g.pot_no} ${g.plant_name || g.nickname}`"
+                  :value="g.id"
+                />
+              </el-select>
+            </el-form-item>
             <el-form-item label="任务"><el-input v-model="form.task_title" placeholder="如：给月季施肥" /></el-form-item>
             <el-form-item label="日期"><el-date-picker v-model="form.remind_date" type="date" value-format="YYYY-MM-DD" /></el-form-item>
             <el-form-item><el-button type="primary" @click="create">创建提醒</el-button></el-form-item>
@@ -26,34 +36,37 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import ReminderList from '@/components/common/ReminderList.vue'
 import { useReminderStore } from '@/stores/reminderStore'
+import { listGardens } from '@/api/garden'
 import { getSeasonTasks } from '@/utils/season'
-import type { CareReminder } from '@/types/api'
+import type { CareReminder, UserGarden } from '@/types/api'
 
 const store = useReminderStore()
 const seasonTasks = getSeasonTasks()
 const currentMonth = new Date().getMonth() + 1
 const reminders = ref<CareReminder[]>([])
-const form = reactive({ task_title: '', remind_date: '' })
+const gardenItems = ref<UserGarden[]>([])
+const activePots = computed(() => gardenItems.value.filter((g) => g.status === 'active'))
+const form = reactive({ garden_id: undefined as number | undefined, task_title: '', remind_date: '' })
 
 onMounted(async () => {
-  await store.load()
+  await Promise.all([store.load(), listGardens().then((g) => (gardenItems.value = g))])
   reminders.value = store.reminders
 })
 
 async function create() {
-  if (!form.task_title || !form.remind_date) {
-    ElMessage.warning('请填写任务与日期')
+  if (!form.garden_id || !form.task_title || !form.remind_date) {
+    ElMessage.warning('请选择花盆、填写任务与日期')
     return
   }
-  await store.create({ task_title: form.task_title, remind_date: form.remind_date })
+  const result = await store.create({ garden_id: form.garden_id, task_title: form.task_title, remind_date: form.remind_date })
   reminders.value = store.reminders
   form.task_title = ''
   form.remind_date = ''
-  ElMessage.success('养护提醒已创建')
+  ElMessage.success(result.already_existed ? '该计划已存在，返回已有计划' : '养护提醒已创建')
 }
 async function markDone(id: number) {
   await store.setStatus(id, 'done')
