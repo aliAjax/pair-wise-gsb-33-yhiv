@@ -25,7 +25,11 @@ export interface UserInfo {
 export interface CareReminder {
   id: number
   user_id: number
+  user_garden_id: number
+  pot_number: number
   plant_species_id: number
+  pot_nickname: string
+  pot_location: string
   task_title: string
   remind_date: string
   frequency: string
@@ -40,8 +44,12 @@ export interface UserGarden {
   nickname: string
   owned_since: string
   location: string
-  care_reminder_id: number
   created_at: string
+}
+
+// 花园接口返回的花盆视图，携带绑定到该盆的提醒
+export interface GardenView extends UserGarden {
+  reminders: CareReminder[]
 }
 
 export interface DiseasePest {

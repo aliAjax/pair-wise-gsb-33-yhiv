@@ -26,10 +26,17 @@ request.interceptors.response.use(
   },
   (err) => {
     const status = err.response?.status
-    const msg = err.response?.data?.message || '网络异常'
+    const body = err.response?.data
+    const msg = body?.message || '网络异常'
     if (status === 401) {
       const auth = useAuthStore()
       auth.logout()
+    }
+    // 409 冲突（如两台设备同时提交同一计划）时，后端在 data 里带回已有记录，
+    // 调用方可以直接拿到已有计划而不是只拿到一个错误。
+    if (status === 409 && body?.data) {
+      ElMessage.warning(msg)
+      return Promise.reject(Object.assign(new Error(msg), { existing: body.data, status }))
     }
     ElMessage.error(msg)
     return Promise.reject(err)

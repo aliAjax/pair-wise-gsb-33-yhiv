@@ -12,6 +12,8 @@ func registerGardenRoutes(v1 *gin.RouterGroup, cfg *config.Config, h *handler.Us
 	gardens := v1.Group("/gardens", middleware.AuthRequired(cfg))
 	gardens.GET("", h.List)
 	gardens.POST("", limiter.Limit(), h.Add)
+	gardens.PUT("/:id", h.Update)
+	gardens.POST("/:id/repot", limiter.Limit(), h.Repot)
 	gardens.PUT("/:id/reminder", h.BindReminder)
 	gardens.DELETE("/:id", h.Remove)
 }

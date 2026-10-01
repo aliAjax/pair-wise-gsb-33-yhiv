@@ -55,19 +55,18 @@ func (h *UserGardenHandler) Add(c *gin.Context) {
 	c.JSON(http.StatusCreated, dto.OK(created))
 }
 
-// BindReminder handles PUT /gardens/:id/reminder.
-func (h *UserGardenHandler) BindReminder(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil {
-		c.Error(util.NewAppError(http.StatusBadRequest, constants.CodeBadRequest, "invalid garden id"))
+// Update handles PUT /gardens/:id.
+func (h *UserGardenHandler) Update(c *gin.Context) {
+	id, ok := parseGardenID(c)
+	if !ok {
 		return
 	}
-	var req dto.GardenBindRequest
+	var req dto.GardenUpdateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.Error(util.NewAppError(http.StatusBadRequest, constants.CodeBadRequest, constants.MsgInvalidParam))
 		return
 	}
-	g, err := h.svc.BindReminder(middleware.GetUserID(c), uint(id), req.ReminderID)
+	g, err := h.svc.Update(middleware.GetUserID(c), id, req.Nickname, req.Location)
 	if err != nil {
 		c.Error(err)
 		return
@@ -75,16 +74,62 @@ func (h *UserGardenHandler) BindReminder(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.OK(g))
 }
 
-// Remove handles DELETE /gardens/:id.
-func (h *UserGardenHandler) Remove(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil {
-		c.Error(util.NewAppError(http.StatusBadRequest, constants.CodeBadRequest, "invalid garden id"))
+// Repot handles POST /gardens/:id/repot.
+func (h *UserGardenHandler) Repot(c *gin.Context) {
+	id, ok := parseGardenID(c)
+	if !ok {
 		return
 	}
-	if err := h.svc.Remove(middleware.GetUserID(c), uint(id)); err != nil {
+	var req dto.GardenRepotRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(util.NewAppError(http.StatusBadRequest, constants.CodeBadRequest, constants.MsgInvalidParam+": "+err.Error()))
+		return
+	}
+	view, err := h.svc.Repot(middleware.GetUserID(c), id, req.OwnedSince, req.Nickname, req.Location)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, dto.OK(view))
+}
+
+// BindReminder handles PUT /gardens/:id/reminder.
+func (h *UserGardenHandler) BindReminder(c *gin.Context) {
+	id, ok := parseGardenID(c)
+	if !ok {
+		return
+	}
+	var req dto.GardenBindRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(util.NewAppError(http.StatusBadRequest, constants.CodeBadRequest, constants.MsgInvalidParam))
+		return
+	}
+	view, err := h.svc.BindReminder(middleware.GetUserID(c), id, req.ReminderID)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, dto.OK(view))
+}
+
+// Remove handles DELETE /gardens/:id.
+func (h *UserGardenHandler) Remove(c *gin.Context) {
+	id, ok := parseGardenID(c)
+	if !ok {
+		return
+	}
+	if err := h.svc.Remove(middleware.GetUserID(c), id); err != nil {
 		c.Error(err)
 		return
 	}
 	c.JSON(http.StatusOK, dto.OK(gin.H{"removed": true}))
+}
+
+func parseGardenID(c *gin.Context) (uint, bool) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.Error(util.NewAppError(http.StatusBadRequest, constants.CodeBadRequest, "invalid garden id"))
+		return 0, false
+	}
+	return uint(id), true
 }

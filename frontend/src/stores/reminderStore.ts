@@ -10,7 +10,7 @@ export const useReminderStore = defineStore('reminder', () => {
     reminders.value = await listReminders(status)
   }
 
-  async function create(payload: { plant_species_id?: number; task_title: string; remind_date: string; frequency?: string }) {
+  async function create(payload: { user_garden_id: number; plant_species_id?: number; task_title: string; remind_date: string; frequency?: string }) {
     await createReminder(payload)
     await load()
   }

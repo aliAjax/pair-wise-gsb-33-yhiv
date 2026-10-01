@@ -1,5 +1,14 @@
 <template>
   <el-table :data="reminders" stripe empty-text="暂无养护提醒">
+    <el-table-column label="花盆" width="150">
+      <template #default="{ row }">
+        <span v-if="row.user_garden_id" class="pot-cell">
+          <el-tag size="small" type="info">#{{ row.pot_number || row.user_garden_id }}</el-tag>
+          <span class="pot-name">{{ row.pot_nickname || '未命名' }}</span>
+        </span>
+        <span v-else class="pot-unbound">未绑定花盆</span>
+      </template>
+    </el-table-column>
     <el-table-column prop="task_title" label="任务" min-width="180" />
     <el-table-column label="提醒日期" width="120">
       <template #default="{ row }">{{ formatDate(row.remind_date) }}</template>
@@ -39,3 +48,9 @@ function frequencyText(f: string): string {
   return map[f] || f || '-'
 }
 </script>
+
+<style scoped>
+.pot-cell { display: inline-flex; align-items: center; gap: 6px; }
+.pot-name { color: #606266; font-size: 12px; }
+.pot-unbound { color: #c0c4cc; font-size: 12px; }
+</style>

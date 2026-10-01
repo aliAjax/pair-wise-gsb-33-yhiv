@@ -2,16 +2,18 @@ package main
 
 import (
 	"log/slog"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
 	"github.com/gbplantwiki/gbplantwiki/internal/constants"
 	"github.com/gbplantwiki/gbplantwiki/internal/model"
+	"github.com/gbplantwiki/gbplantwiki/internal/repository"
 )
 
 func migrate(db *gorm.DB) error {
-	return db.AutoMigrate(
+	if err := db.AutoMigrate(
 		&model.User{},
 		&model.PlantSpecies{},
 		&model.CareArticle{},
@@ -21,7 +23,51 @@ func migrate(db *gorm.DB) error {
 		&model.UserGarden{},
 		&model.Question{},
 		&model.Answer{},
-	)
+	); err != nil {
+		return err
+	}
+
+	// Per-pot model: multiple pots of the same species are now allowed, so the
+	// legacy (user_id, plant_species_id) unique index must go.
+	if indexExists(db, "user_gardens", "uk_garden_user_plant") {
+		if err := db.Exec("ALTER TABLE user_gardens DROP INDEX uk_garden_user_plant").Error; err != nil {
+			return err
+		}
+	}
+	// Reminders are linked from the reminder side now; drop the stale column.
+	if columnExists(db, "user_gardens", "care_reminder_id") {
+		if err := db.Exec("ALTER TABLE user_gardens DROP COLUMN care_reminder_id").Error; err != nil {
+			return err
+		}
+	}
+	// uk_reminder_plan covers user_id lookups via its leftmost prefix.
+	if indexExists(db, "care_reminders", "idx_reminders_user") {
+		if err := db.Exec("ALTER TABLE care_reminders DROP INDEX idx_reminders_user").Error; err != nil {
+			return err
+		}
+	}
+
+	// Backfill: legacy reminders without a pot number are assigned to the pot
+	// of the same species that the user took over first.
+	reminderRepo := repository.NewCareReminderRepository(db)
+	if err := reminderRepo.AssignLegacyReminders(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func indexExists(db *gorm.DB, table, name string) bool {
+	var cnt int64
+	db.Raw("SELECT COUNT(1) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?",
+		table, name).Scan(&cnt)
+	return cnt > 0
+}
+
+func columnExists(db *gorm.DB, table, name string) bool {
+	var cnt int64
+	db.Raw("SELECT COUNT(1) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?",
+		table, name).Scan(&cnt)
+	return cnt > 0
 }
 
 func seed(db *gorm.DB) error {
@@ -78,9 +124,20 @@ func seed(db *gorm.DB) error {
 		return err
 	}
 
+	// Independent pots: even the same species can be registered more than once
+	// (e.g. after division), each with its own location and takeover date.
+	pots := []model.UserGarden{
+		{UserID: user.ID, PlantSpeciesID: plants[3].ID, Nickname: "月季·老桩", OwnedSince: mustDate("2025-03-10"), Location: "南阳台 A1"},
+		{UserID: user.ID, PlantSpeciesID: plants[3].ID, Nickname: "月季·分株苗", OwnedSince: mustDate("2026-05-20"), Location: "南阳台 A2"},
+		{UserID: user.ID, PlantSpeciesID: plants[0].ID, Nickname: "龟背竹", OwnedSince: mustDate("2025-09-01"), Location: "客厅窗边"},
+	}
+	if err := db.Create(&pots).Error; err != nil {
+		return err
+	}
+
 	reminders := []model.CareReminder{
-		{UserID: user.ID, PlantSpeciesID: plants[3].ID, TaskTitle: "给月季补充缓释肥", Frequency: "monthly", Status: model.ReminderPending},
-		{UserID: user.ID, PlantSpeciesID: plants[0].ID, TaskTitle: "龟背竹叶片擦拭除尘", Frequency: "weekly", Status: model.ReminderPending},
+		{UserID: user.ID, UserGardenID: pots[0].ID, PlantSpeciesID: plants[3].ID, TaskTitle: "给月季补充缓释肥", RemindDate: time.Now().AddDate(0, 0, 3), Frequency: "monthly", Status: model.ReminderPending},
+		{UserID: user.ID, UserGardenID: pots[2].ID, PlantSpeciesID: plants[0].ID, TaskTitle: "龟背竹叶片擦拭除尘", RemindDate: time.Now().AddDate(0, 0, 1), Frequency: "weekly", Status: model.ReminderPending},
 	}
 	if err := db.Create(&reminders).Error; err != nil {
 		return err
@@ -104,6 +161,17 @@ func seed(db *gorm.DB) error {
 
 	logger.Info("gbplantwiki seed data created",
 		"users", 2, "plants", len(plants), "articles", len(articles),
-		"pests", len(pests), "reminders", len(reminders), "questions", len(questions), "answers", len(answers))
+		"pests", len(pests), "pots", len(pots), "reminders", len(reminders),
+		"questions", len(questions), "answers", len(answers))
 	return nil
+}
+
+// mustDate parses a YYYY-MM-DD seed date. Seed literals are compile-time
+// known, so a bad value panics during startup rather than failing silently.
+func mustDate(s string) time.Time {
+	parsed, err := time.ParseInLocation("2006-01-02", s, time.Local)
+	if err != nil {
+		panic(err)
+	}
+	return parsed
 }

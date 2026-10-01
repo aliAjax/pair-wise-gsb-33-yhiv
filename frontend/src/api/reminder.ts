@@ -9,7 +9,7 @@ export function listRemindersByMonth(year: number, month: number) {
   return request.get<never, CareReminder[]>('/reminders/calendar', { params: { year, month } })
 }
 
-export function createReminder(payload: { plant_species_id?: number; task_title: string; remind_date: string; frequency?: string }) {
+export function createReminder(payload: { user_garden_id: number; plant_species_id?: number; task_title: string; remind_date: string; frequency?: string }) {
   return request.post<never, CareReminder>('/reminders', payload)
 }
 

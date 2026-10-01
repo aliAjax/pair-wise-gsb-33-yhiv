@@ -140,18 +140,20 @@ gb-61/
 | POST | /api/v1/pests | 管理员（限流） | 新增病虫害条目 |
 | PUT | /api/v1/pests/:id | 管理员 | 更新病虫害条目 |
 | DELETE | /api/v1/pests/:id | 管理员 | 删除病虫害条目 |
-| GET | /api/v1/reminders | 登录 | 当前用户提醒列表（自动标记逾期） |
-| GET | /api/v1/reminders/calendar | 登录 | 按月查询提醒 |
-| POST | /api/v1/reminders | 登录（限流） | 创建养护提醒 |
+| GET | /api/v1/reminders | 登录 | 当前用户提醒列表（自动标记逾期，返回花盆编号/昵称/位置） |
+| GET | /api/v1/reminders/calendar | 登录 | 按月查询提醒（同样带花盆信息） |
+| POST | /api/v1/reminders | 登录（限流） | 创建养护提醒并绑定具体花盆（`user_garden_id`）；两台设备并发提交同一计划时后到者返回 409 + 已有计划 |
 | PUT | /api/v1/reminders/:id/status | 登录 | 状态流转 pending/done |
 | DELETE | /api/v1/reminders/:id | 登录 | 删除提醒 |
 | GET | /api/v1/favorites | 登录 | 收藏列表 |
 | POST | /api/v1/favorites | 登录（限流） | 添加收藏 |
 | DELETE | /api/v1/favorites/:targetType/:targetId | 登录 | 取消收藏 |
-| GET | /api/v1/gardens | 登录 | 我的花园列表 |
-| POST | /api/v1/gardens | 登录（限流） | 加入我的花园 |
-| PUT | /api/v1/gardens/:id/reminder | 登录 | 关联养护提醒 |
-| DELETE | /api/v1/gardens/:id | 登录 | 移除花园条目 |
+| GET | /api/v1/gardens | 登录 | 我的花盆列表（同一品种可登记多盆，每盆携带其提醒） |
+| POST | /api/v1/gardens | 登录（限流） | 登记一个花盆（独立位置与接管时间） |
+| PUT | /api/v1/gardens/:id | 登录 | 编辑花盆昵称/位置 |
+| POST | /api/v1/gardens/:id/repot | 登录（限流） | 换盆：更新接管时间，未完成提醒按新起算日重排，已完成记录不变（事务） |
+| PUT | /api/v1/gardens/:id/reminder | 登录 | 关联养护提醒到花盆（事务） |
+| DELETE | /api/v1/gardens/:id | 登录 | 移除花盆，其提醒解除花盆绑定但保留（事务） |
 | GET | /api/v1/questions | 公开 | 问答列表 |
 | GET | /api/v1/questions/:id | 公开 | 问题详情 |
 | GET | /api/v1/questions/:id/answers | 公开 | 问题回答列表 |

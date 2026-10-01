@@ -58,8 +58,8 @@ func (h *CareReminderHandler) Create(c *gin.Context) {
 		return
 	}
 	m := &model.CareReminder{
-		PlantSpeciesID: req.PlantSpeciesID, TaskTitle: req.TaskTitle,
-		RemindDate: req.RemindDate, Frequency: req.Frequency,
+		UserGardenID: req.UserGardenID, PlantSpeciesID: req.PlantSpeciesID,
+		TaskTitle: req.TaskTitle, RemindDate: req.RemindDate, Frequency: req.Frequency,
 	}
 	created, err := h.svc.Create(middleware.GetUserID(c), m)
 	if err != nil {
